@@ -1,0 +1,413 @@
+---
+title: "Infrequent Voter Analysis"
+author: "Swikriti Dumre"
+format:
+  html:
+   embed-resources: true
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+library(tidyverse)
+
+ipsos_poll <- read.csv(
+  "http://drive.google.com/uc?export=download&id=1nIQA5HMbvrdYDlpEJcTPzArBkSUp87gc",
+  na.strings = c(-1, "NA")
+  ) |>
+  select(ppage, educ, race, gender, income_cat, Q30, voter_category) |>
+  mutate(infrequent_voter = ifelse(voter_category == "rarely/never", 1, 0))
+
+new_members <- read.csv(
+  "https://drive.google.com/uc?export=download&id=1lxNnBoi73P2LAS3cM5GMs8LuNwPiXMFN",
+  na.strings = c(-1, "NA")
+  ) |>
+  select(ppage, educ, race, gender, income_cat, Q30, voter_category)|>
+  mutate(infrequent_voter = ifelse(voter_category == "rarely/never", 1, 0))
+```
+
+## Introduction 
+
+Many Americans who are eligible to vote do not participate in elections. For example, voter turnout in the 2024 presidential election was $63.9\%$, meaning that over a third of eligible Americans did not (for whatever reason) participate in the election. This was one of the higher turn-out elections in recent American history; in 1996, for example, only $51.7\%$ eligible voters voted.
+
+In this report, we will be answering the following questions:
+
+- `Does political party affiliation plays a role in an individual’s likelihood of voting. ` 
+`If so, what is the nature of this relationship?`
+
+We will also try to identify people who are likely to be infrequent voters from a dataset of 500 new people and analyze the realiability of the categorization.
+
+In this report, we are using the data set collected between September 15 and September 25, 2020. This was sampled by FiveThiryEight x IPSOS with participation of over 5,000 U.S. citizens. 
+
+### Variables 
+
+  
+The variables we are using this report are as follows:
+
+- `ppage`: the age of the respondent, in years
+
+- `educ`: highest educational attainment, represented categorically
+
+- `race`: self-reported race and ethnicity of the respondent
+
+- `gender`: self-reported gender of the respondent
+
+- `income_cat`: household income, represented categorically
+
+- `Q30`: Response to the question “Generally speaking, do you think of yourself as a …”,
+
+    * Republican - `1`
+    * Democrat - `2`
+    * Independent - `3`
+    * Another party - `4`
+    * No preference - `5`
+
+- `voter_category`: Past voting behavior, categorized as
+
+    * “always” : the respondent voted in all or all-but-one of the elections they were eligible in)
+    * “sporadic”:  the respondent voted in at least two, but fewer than all-but-one, of the elections they were eligible in
+    * “rarely/never”: the respondent voted in 0 or 1 of the elections they were eligible in
+
+#### Addition of variable 
+
+- `infrequent_voter`: We created this additional variable as a binary outcome to rarely/never response in the voter category variable. If the participant responded rarely/never, infrequent_voter is 1, 0 otherwise. We created it to perform logistic regression on this variable and avoid complexities with 3 different outcome results provided by "voter_category".
+
+## Data Analysis 
+
+### Missing Data Strategy
+
+In this dataset, there were $40$ na values were present only in`Q30` variable. They belonged to both frequent and infrequent voters. As their party affiliation is missing, it might create bias towards party affiliated people. In order to avoid the bias, we have replaced the na values with "Missing" value. 
+
+```{r}
+#| echo: false
+#| results: hide
+
+nrow(ipsos_poll[is.na(ipsos_poll$Q30), ])
+```
+
+Likewise, we formatted numerical values of `Q30` to their string correspondents (e.g. Republican, Democrat, etc.) in order to keep the categories visible throughout the model and avoid numerical computation of categorical variables.   
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+library(dplyr)
+ipsos_poll_edited <- mutate(ipsos_poll, Q30 = recode(Q30,
+                                     `1` = "Republican",
+                                     `2` = "Democrat",
+                                     `3` = "Independent",
+                                     `4` = "Another party",
+                                     `5` = "No preference"
+                                    )
+              )
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+clean_ipsos <- ipsos_poll_edited |>
+  mutate( Q30 = replace_na(Q30, "Missing"))
+```
+
+## Summary on Raw Data 
+
+```{r}
+#| label: fig-voting-party
+#| fig-cap: "Voting Frequency Rates by Political Affiliation"
+#| echo: false
+#| warning: false
+
+library(ggplot2)
+
+ ggplot(data = clean_ipsos, 
+       aes(x = as.factor(Q30), fill = as.factor(infrequent_voter))) +
+  geom_bar(position = "fill") + 
+  scale_fill_manual(
+    values = c("0" = "#B0C4DE", "1" = "#CD5C5C"), 
+    labels = c("Frequent/Sporadic", "Infrequent"),
+    name = "Voter Status"
+  ) +
+  labs(
+    title = "Proportion of Infrequent Voters by Political Party",
+    x = "Political Affiliation (Q30)",
+    y = "Proportion (Percentage)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+```
+
+In @fig-voting-party, we observe that two of the highest percentages of infrequent voters either have no preference of a political party or have their data missing. This gives us an idea that affiliation with political party has made a difference in our data set.
+
+### Data Wrangling
+
+```{r}
+#| echo: false
+#| warning: false
+clean_ipsos <- clean_ipsos |>
+  mutate(Q30 = ifelse(Q30 %in% c("Missing", "No preference"), "No Affiliation", Q30))
+```
+
+For this report, we chose to merge "Missing" and "No preference" voters as "No Affiliation" because both of them are not associated with any political party as per the data set. Therefore, having them as a single variable clearly separates any affiliation or non-affiliation with the political parties.
+
+```{r}
+#| label: fig-demographics
+#| fig-cap: "Infrequent Voting Rates Across Demographic Predictors"
+#| echo: false
+
+library(patchwork)
+
+p1 <- ggplot(clean_ipsos, aes(x = educ, fill = as.factor(infrequent_voter))) +
+  geom_bar(position = "fill") + 
+   scale_fill_manual(
+    values = c("0" = "#B0C4DE", "1" = "#CD5C5C"), 
+    labels = c("Frequent/Sporadic", "Infrequent"),
+    name = "Voter Status"
+  ) +
+  coord_flip() + theme_minimal() + labs(title = "Education", x = "", y = "")
+
+p2 <- ggplot(clean_ipsos, aes(x = income_cat, fill = as.factor(infrequent_voter))) +
+  geom_bar(position = "fill") + 
+    scale_fill_manual(
+    values = c("0" = "#B0C4DE", "1" = "#CD5C5C"), 
+    labels = c("Frequent/Sporadic", "Infrequent"),
+    name = "Voter Status"
+  ) +
+  coord_flip() + theme_minimal() + labs(title = "Income", x = "", y = "")
+
+(p1 / p2) + plot_layout(guides = "collect")
+```
+
+According to @fig-demographics, we observe that people with high school or less education, and less than $\$ \, 40k$ income are most likely to be infrequent voters. As they also follow an ordinal variable order, we chose to use "High school or less" and income of "less than $\$40\,k$ as our baseline value. This also improves interpretability as they are lowest levels and the variables follow an increaing level of comparison. For political affiliation, we chose “No Affiliation” as the reference group because it represents individuals without a political identity. This helps us to compare people who identify with a political party and those who do not easily.
+
+```{r}
+#| echo: false
+#| warning: false
+clean_ipsos <- clean_ipsos |>
+  mutate(
+    educ = factor(educ, levels = c("High school or less", "Some college", "College")),
+    income_cat = factor(income_cat, levels = c("Less than $40k", "$40-75k", "$75-125k", "$125k or more")),
+    Q30 = factor(Q30, levels = c("No Affiliation", "Another party", "Independent", "Democrat", "Republican")),
+    gender = factor(gender, levels = c("Male", "Female"))
+  )
+```
+
+
+## Fitting the Model
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+reduced <- glm(infrequent_voter ~ ppage + educ + race + gender + income_cat, data=clean_ipsos, family = binomial)
+voter_model <- glm(infrequent_voter ~Q30 + ppage + educ + race + gender + income_cat, data=clean_ipsos, family = binomial)
+anova(reduced, voter_model, test="Chisq")
+```
+
+- `Outcome Variable`: infrequent_voter
+- `Predictor variables for Reduced Model`: ppage, educ, race, gender, income_cat
+- `Predictor variables for Full Model`: Q30, ppage, educ, race, gender, income_cat
+
+We performed a G-test to compare a model with political party association and a model without it. We find that adding political affiliation significantly improves the model, while holding age, education, race, gender, and income constant. We observe a reduction in deviance of $142.03$ on $4$ degrees of freedom  $p < 0.001$ in our complete model, which is a statistically significant improvement. Therefore, we can claim that political party affiliation plays a role in an individual’s likelihood of voting.
+
+In order to observe the nature of the relationship, we will analyze the coefficients of our full model.
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+summary(voter_model)$coefficients
+```
+
+#### Population Model 
+
+$$log(\frac{\pi}{1  - \pi})= \beta_0 + \beta_{1-Q30:Another Party} + \beta_{2-Q30:Independent} + \beta_{3-Q30: Democrat} + \beta_{4-Q30:Republican}$$
+$$+\beta_{5-ppage}+ \beta_{6-educ\leq HS}+ \beta_{7-educ:SomeCollege}+  \beta_{8-educ:College} +  \beta_{9-educ:College}$$
+$$+\beta_{10-race:Hispanic}+ \beta_{11-race:Other/Mixed}+ \beta_{12-race:White}$$
+
+$$+\beta_{13-gender:Female}+ \beta_{14-income: 40-75}+ \beta_{15-income:75-125}+  \beta_{16-income:125k\,or\,more}$$
+
+
+## Significance Testing 
+
+According to the summary of the model, the intercept is the coefficient for baseline value of log odds of a person of 0 age, with no political affiliations , with high school or less education and income level less than $40$ k $\$$ being an infrequent voter. We can see a z value of $17.84$ which is highly significant accompanied by a p-value of almost $0$. This reiterates that people with baseline attributes are the most likely to be infrequent voters.
+We also observe ($z = -4.5$, $p = 6.57 \times 10^{-6}$) for Another Party, ($z = -7.29$, $p = 2.93 \times 10^{-13}$) for Independent, ($z = -11.16$, $p = 6.30 \times 10^{-29}$) for Democrat and ($z = -9.63$, $p = 5.94 \times 10^{-22}$), which suggests that all the coefficients for party affiliation are of statistical significance and affiliation with party does make a difference on the probability of being an infrequent voter.
+
+Let us quantify the odds of a person being an infrequent voter when affiliated to each party representation in this data set keeping all other variables constant as baseline variables. 
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+exp(cbind(OR = coef(voter_model), confint(voter_model)))
+```
+
+
+```{r}
+#| label: tbl-coefficient-mdl
+#| tbl-cap: Estimates of the model parameters and their accompanying standard errors 
+#| echo: false
+library(knitr)
+coefficient_table <- tibble(
+  Party = c("No Affiliation", "Another Party", "Independent", "Democrat","Republican"),
+  OddsRatio = c("1", "0.2651886", "0.4336315", "0.2959636", "0.329145"),
+  Confidence_interval = c("NA", "0.15 - 0.46", "0.35 - 0.54", "0.24 - 0.37", "0.26 - 0.41"),
+  Infrequent_Voter_Probability = c("0.96", "0.88", "0.92", "0.88", "0.90"),
+  
+)
+
+kable(coefficient_table)
+```
+
+According to @tbl-coefficient-mdl, we can observe that highest probability of being an infrequent voter is of people who are not affiliated to any parties. In comparison to no affiliation to any party, we are $95\%$ confident that the odds of a black male person of age 0, income lower than $\$\, 40\,k\,$, with education of high school or less  being an infrequent voter lowers by $46\% \,\text{to}\, 65\%$ if they identify as independent, lowers by  $59\% \,\text{to}\, 74\%$ if they are affiliated to Republican, lowers by $63\% \,\text{to}\, 76\%$ if they are affiliated to Democrats, and lowers by $54\% \,\text{to}\, 85\%$ if they are affiliated to any other party.
+
+
+These quantifications are for a person who is 0 years old. Therefore, it is not valid comparison for real-life scenario, but we need to remember that for each additional increase in age, the odds that the person is an infrequent voter decreases by $5.1 \%$ as  $e^{ -0.05230131} \sim 0.949$.
+
+
+
+## Prediction for new Members
+
+In order to predict the potential infrequent voters from the new 500 people added to the mailing list, we will perform the same data wrangling that we applied in our ipsos data set. They are listed below: 
+
+- Change Q30 na values to "Missing" and merge "Missing" and "No preference" as "No affiliation".
+- Set "No Affiliation" as the baseline value for political parties. 
+- Set other variables in increasing order of their quanitative values.
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+library(dplyr)
+new_members_edited <- mutate(new_members, Q30 = recode(Q30,
+                                     `1` = "Republican",
+                                     `2` = "Democrat",
+                                     `3` = "Independent",
+                                     `4` = "Another party",
+                                     `5` = "No preference"
+                                    )
+              )
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide
+new_members_edited <- new_members_edited |>
+  mutate( Q30 = replace_na(Q30, "Missing"))
+```
+
+```{r}
+#| echo: false
+#| warning: false
+new_members_edited <- new_members_edited |>
+  mutate(Q30 = ifelse(Q30 %in% c("Missing", "No preference"), "No Affiliation", Q30)) |>
+  mutate(
+    educ = factor(educ, levels = c("High school or less", "Some college", "College")),
+    income_cat = factor(income_cat, levels = c("Less than $40k", "$40-75k", "$75-125k", "$125k or more")),
+    Q30 = factor(Q30, levels = c("No Affiliation", "Another party", "Independent", "Democrat", "Republican")),
+    gender = factor(gender, levels = c("Male", "Female"))
+  )
+```
+
+-----------------
+
+```{r}
+#| echo: false
+#| warning: false
+new_members_edited <- new_members_edited |>
+  mutate(pred_probs = (predict(voter_model,
+                      newdata = new_members_edited,
+                      type = "response")) )
+```
+
+
+```{r}
+#| echo: false
+
+library(tidyverse)
+new_members_edited <- new_members_edited |>
+  mutate(pred_class = ifelse(pred_probs > 0.45, 1, 0))
+```
+
+```{r}
+#| echo: false
+predicted_newMember_infrequentVoter <- new_members_edited |>
+  filter(pred_class == 1)
+```
+
+```{r}
+#| echo: false
+#| results: hide
+nrow(predicted_newMember_infrequentVoter)
+```
+
+We predicted 76 infrequent voters in new members by calculating the predicted probability for all of them based on the model we fitted for our original data set. We are keeping a threshold probability of $0.45$. We are taking lower threshold of 0.45 to increase our sensitivity and reach more potential infrequent voters.
+
+```{r}
+#| echo: false
+#| results: hide
+#| warning: false
+
+xtabs( ~ pred_class + infrequent_voter, data = new_members_edited)
+```
+
+
+```{r}
+#| label: tbl-confusion-matrix
+#| tbl-cap: New Members Infrequency Prediction 
+#| echo: false
+
+library(knitr)
+library(tibble)
+
+conf_matrix_table <- tibble(
+  `Predicted Status` = c("Frequent/Sporadic (0)", "Infrequent (1)"),
+  `Actual: Frequent/Sporadic (0)` = c("330", "31"),
+  `Actual: Infrequent (1)` = c("94", "45")
+)
+
+kable(
+  conf_matrix_table,
+  col.names = c("Predicted Status", "Actual: Frequent/Sporadic (0)", "Actual: Infrequent (1)"),
+  align = c("l", "c", "c")
+)
+```
+
+
+Using this threshold, we correctly identify $45$ infrequent voters. However, the matrix shows that we also missed $94$ infrequent voters (false negatives). We got a false positive of $31$ people,and correctly reject $330$ of them. From this matrix, we can infer that the sensitivity of this model is low and we are missing a significant number of target audience.
+
+```{r}
+#| echo: false
+#| warning: false
+#| results: hide 
+library(pROC)
+
+rocplot <- pROC::roc(infrequent_voter ~ pred_probs, data = new_members_edited)
+pROC::auc(rocplot) 
+```
+
+```{r}
+#| label: fig-roc-curve
+#| fig-cap: ROC Curve for new-member Infrequent Voter Prediction
+#| echo: false
+#| warning: false
+
+plot(rocplot, 
+     print.auc = TRUE, 
+     col = "blue", 
+     main = "ROC Curve for Mailing List Classification")
+```
+
+From this model, we get an Area under the curve of 0.734 which suggests that this categorization is not as reliable, and we should consider including any other relevant variables from the dataset to build a stronger model.
+
+## Conclusion
+
+From the report, we can conclude that political party is indeed a strong predictor of voting behavior within US citizens. In comparison to unaffiliated voters, people who identify with a party are less likely to be infrequent voters. Additionally, people meeting the baseline criteria of highschool level education, and low household income are more likely to be infrequent voters in general, which could potentially be used to target other infrequent voters. This difference suggests a potential cyclic relationship of mistrust between people and politics where socio economic barriers are encouraging low voting participation. For future, in order to identify for infrequent voters and reduce the number we can focus more towards qualitative measures of political engagement.
+
